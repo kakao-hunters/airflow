@@ -20,11 +20,12 @@ from __future__ import annotations
 import os
 import urllib.parse
 import warnings
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Iterable, Iterator
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Iterable, Iterator, cast
 
 import attr
 from sqlalchemy import select
 
+from airflow.serialization.dag_dependency import DagDependency
 from airflow.typing_compat import TypedDict
 from airflow.utils.session import NEW_SESSION, provide_session
 
@@ -56,6 +57,11 @@ def _get_uri_normalizer(scheme: str) -> Callable[[SplitResult], SplitResult] | N
     return ProvidersManager().dataset_uri_handlers.get(scheme)
 
 
+def _get_normalized_scheme(uri: str) -> str:
+    parsed = urllib.parse.urlsplit(uri)
+    return parsed.scheme.lower()
+
+
 def _sanitize_uri(uri: str) -> str:
     """
     Sanitize a dataset URI.
@@ -72,7 +78,8 @@ def _sanitize_uri(uri: str) -> str:
     parsed = urllib.parse.urlsplit(uri)
     if not parsed.scheme and not parsed.netloc:  # Does not look like a URI.
         return uri
-    normalized_scheme = parsed.scheme.lower()
+    if not (normalized_scheme := _get_normalized_scheme(uri)):
+        return uri
     if normalized_scheme.startswith("x-"):
         return uri
     if normalized_scheme == "airflow":
@@ -185,6 +192,14 @@ class BaseDataset:
     def iter_datasets(self) -> Iterator[tuple[str, Dataset]]:
         raise NotImplementedError
 
+    def iter_dag_dependencies(self, *, source: str, target: str) -> Iterator[DagDependency]:
+        """
+        Iterate a base dataset as dag dependency.
+
+        :meta private:
+        """
+        raise NotImplementedError
+
 
 @attr.define()
 class DatasetAlias(BaseDataset):
@@ -199,6 +214,19 @@ class DatasetAlias(BaseDataset):
 
     def __hash__(self) -> int:
         return hash(self.name)
+
+    def iter_dag_dependencies(self, *, source: str, target: str) -> Iterator[DagDependency]:
+        """
+        Iterate a dataset alias as dag dependency.
+
+        :meta private:
+        """
+        yield DagDependency(
+            source=source or "dataset-alias",
+            target=target or "dataset-alias",
+            dependency_type="dataset-alias",
+            dependency_id=self.name,
+        )
 
 
 class DatasetAliasEvent(TypedDict):
@@ -231,6 +259,28 @@ class Dataset(os.PathLike, BaseDataset):
     def __hash__(self) -> int:
         return hash(self.uri)
 
+    @property
+    def normalized_uri(self) -> str | None:
+        """
+        Returns the normalized and AIP-60 compliant URI whenever possible.
+
+        If we can't retrieve the scheme from URI or no normalizer is provided or if parsing fails,
+        it returns None.
+
+        If a normalizer for the scheme exists and parsing is successful we return the normalizer result.
+        """
+        if not (normalized_scheme := _get_normalized_scheme(self.uri)):
+            return None
+
+        if (normalizer := _get_uri_normalizer(normalized_scheme)) is None:
+            return None
+        parsed = urllib.parse.urlsplit(self.uri)
+        try:
+            normalized_uri = normalizer(parsed)
+            return urllib.parse.urlunsplit(normalized_uri)
+        except ValueError:
+            return None
+
     def as_expression(self) -> Any:
         """
         Serialize the dataset into its scheduling expression.
@@ -244,6 +294,19 @@ class Dataset(os.PathLike, BaseDataset):
 
     def evaluate(self, statuses: dict[str, bool]) -> bool:
         return statuses.get(self.uri, False)
+
+    def iter_dag_dependencies(self, *, source: str, target: str) -> Iterator[DagDependency]:
+        """
+        Iterate a dataset as dag dependency.
+
+        :meta private:
+        """
+        yield DagDependency(
+            source=source or "dataset",
+            target=target or "dataset",
+            dependency_type="dataset",
+            dependency_id=self.uri,
+        )
 
 
 class _DatasetBooleanCondition(BaseDataset):
@@ -270,6 +333,15 @@ class _DatasetBooleanCondition(BaseDataset):
                     continue
                 yield k, v
                 seen.add(k)
+
+    def iter_dag_dependencies(self, *, source: str, target: str) -> Iterator[DagDependency]:
+        """
+        Iterate dataset, dataset aliases and their resolved datasets  as dag dependency.
+
+        :meta private:
+        """
+        for obj in self.objects:
+            yield from obj.iter_dag_dependencies(source=source, target=target)
 
 
 class DatasetAny(_DatasetBooleanCondition):
@@ -306,6 +378,9 @@ class _DatasetAliasCondition(DatasetAny):
         self.name = name
         self.objects = expand_alias_to_datasets(name)
 
+    def __repr__(self) -> str:
+        return f"_DatasetAliasCondition({', '.join(map(str, self.objects))})"
+
     def as_expression(self) -> Any:
         """
         Serialize the dataset into its scheduling expression.
@@ -313,6 +388,38 @@ class _DatasetAliasCondition(DatasetAny):
         :meta private:
         """
         return {"alias": self.name}
+
+    def iter_dag_dependencies(self, *, source: str = "", target: str = "") -> Iterator[DagDependency]:
+        """
+        Iterate a dataset alias and its resolved datasets  as dag dependency.
+
+        :meta private:
+        """
+        if self.objects:
+            for obj in self.objects:
+                dataset = cast(Dataset, obj)
+                uri = dataset.uri
+                # dataset
+                yield DagDependency(
+                    source=f"dataset-alias:{self.name}" if source else "dataset",
+                    target="dataset" if source else f"dataset-alias:{self.name}",
+                    dependency_type="dataset",
+                    dependency_id=uri,
+                )
+                # dataset alias
+                yield DagDependency(
+                    source=source or f"dataset:{uri}",
+                    target=target or f"dataset:{uri}",
+                    dependency_type="dataset-alias",
+                    dependency_id=self.name,
+                )
+        else:
+            yield DagDependency(
+                source=source or "dataset-alias",
+                target=target or "dataset-alias",
+                dependency_type="dataset-alias",
+                dependency_id=self.name,
+            )
 
 
 class DatasetAll(_DatasetBooleanCondition):
