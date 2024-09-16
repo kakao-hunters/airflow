@@ -21,7 +21,6 @@ from unittest import mock
 
 import pytest
 from botocore.exceptions import ClientError
-from openlineage.client.run import Dataset
 
 from airflow.exceptions import AirflowException, TaskDeferred
 from airflow.providers.amazon.aws.hooks.sagemaker import LogState, SageMakerHook
@@ -30,7 +29,9 @@ from airflow.providers.amazon.aws.operators.sagemaker import SageMakerBaseOperat
 from airflow.providers.amazon.aws.triggers.sagemaker import (
     SageMakerTrigger,
 )
+from airflow.providers.common.compat.openlineage.facet import Dataset
 from airflow.providers.openlineage.extractors import OperatorLineage
+from tests.providers.amazon.aws.utils.test_template_fields import validate_template_fields
 
 EXPECTED_INTEGER_FIELDS: list[list[str]] = [
     ["ResourceConfig", "InstanceCount"],
@@ -235,3 +236,6 @@ class TestSageMakerTrainingOperator:
             inputs=[Dataset(namespace="s3://input-bucket", name="input-path")],
             outputs=[Dataset(namespace="s3://model-bucket", name="model-path")],
         )
+
+    def test_template_fields(self):
+        validate_template_fields(self.sagemaker)

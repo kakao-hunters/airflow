@@ -140,7 +140,9 @@ class KubernetesExecutor(BaseExecutor):
         self.last_handled: dict[TaskInstanceKey, float] = {}
         self.kubernetes_queue: str | None = None
         self.task_publish_retries: Counter[TaskInstanceKey] = Counter()
-        self.task_publish_max_retries = conf.getint("kubernetes", "task_publish_max_retries", fallback=0)
+        self.task_publish_max_retries = conf.getint(
+            "kubernetes_executor", "task_publish_max_retries", fallback=0
+        )
         super().__init__(parallelism=self.kube_config.parallelism)
 
     def _list_pods(self, query_kwargs):
@@ -472,7 +474,12 @@ class KubernetesExecutor(BaseExecutor):
         if self.kube_config.delete_worker_pods:
             if state != TaskInstanceState.FAILED or self.kube_config.delete_worker_pods_on_failure:
                 self.kube_scheduler.delete_pod(pod_name=pod_name, namespace=namespace)
-                self.log.info("Deleted pod: %s in namespace %s", key, namespace)
+                self.log.info(
+                    "Deleted pod associated with the TI %s. Pod name: %s. Namespace: %s",
+                    key,
+                    pod_name,
+                    namespace,
+                )
         else:
             self.kube_scheduler.patch_pod_executor_done(pod_name=pod_name, namespace=namespace)
             self.log.info("Patched pod %s in namespace %s to mark it as done", key, namespace)
@@ -694,6 +701,8 @@ class KubernetesExecutor(BaseExecutor):
                 )
             except ApiException as e:
                 self.log.info("Failed to adopt pod %s. Reason: %s", pod.metadata.name, e)
+                continue
+
             ti_id = annotations_to_key(pod.metadata.annotations)
             self.running.add(ti_id)
 

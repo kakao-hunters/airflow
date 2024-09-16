@@ -40,6 +40,7 @@ from urllib.parse import urlparse
 import sqlparse
 from more_itertools import chunked
 from sqlalchemy import create_engine
+from sqlalchemy.engine import Inspector
 
 from airflow.exceptions import (
     AirflowException,
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
     from pandas import DataFrame
     from sqlalchemy.engine import URL
 
+    from airflow.models import Connection
     from airflow.providers.openlineage.extractors import OperatorLineage
     from airflow.providers.openlineage.sqlparser import DatabaseInfo
 
@@ -182,14 +184,14 @@ class DbApiHook(BaseHook):
         self._replace_statement_format: str = kwargs.get(
             "replace_statement_format", "REPLACE INTO {} {} VALUES ({})"
         )
+        self._connection: Connection | None = kwargs.pop("connection", None)
 
     def get_conn_id(self) -> str:
         return getattr(self, self.conn_name_attr)
 
     @cached_property
     def placeholder(self):
-        conn = self.get_connection(self.get_conn_id())
-        placeholder = conn.extra_dejson.get("placeholder")
+        placeholder = self.connection_extra.get("placeholder")
         if placeholder:
             if placeholder in SQL_PLACEHOLDERS:
                 return placeholder
@@ -202,9 +204,28 @@ class DbApiHook(BaseHook):
             )
         return self._placeholder
 
+    @property
+    def connection(self) -> Connection:
+        if self._connection is None:
+            self._connection = self.get_connection(self.get_conn_id())
+        return self._connection
+
+    @property
+    def connection_extra(self) -> dict:
+        return self.connection.extra_dejson
+
+    @cached_property
+    def connection_extra_lower(self) -> dict:
+        """
+        ``connection.extra_dejson`` but where keys are converted to lower case.
+
+        This is used internally for case-insensitive access of extra params.
+        """
+        return {k.lower(): v for k, v in self.connection_extra.items()}
+
     def get_conn(self):
         """Return a connection object."""
-        db = self.get_connection(self.get_conn_id())
+        db = self.connection
         return self.connector.connect(host=db.host, port=db.port, username=db.login, schema=db.schema)
 
     def get_uri(self) -> str:
@@ -242,7 +263,20 @@ class DbApiHook(BaseHook):
         """
         if engine_kwargs is None:
             engine_kwargs = {}
-        return create_engine(self.get_uri(), **engine_kwargs)
+        engine_kwargs["creator"] = self.get_conn
+
+        try:
+            url = self.sqlalchemy_url
+        except NotImplementedError:
+            url = self.get_uri()
+
+        self.log.debug("url: %s", url)
+        self.log.debug("engine_kwargs: %s", engine_kwargs)
+        return create_engine(url=url, **engine_kwargs)
+
+    @property
+    def inspector(self) -> Inspector:
+        return Inspector.from_engine(self.get_sqlalchemy_engine())
 
     def get_pandas_df(
         self,
@@ -453,6 +487,8 @@ class DbApiHook(BaseHook):
             # If autocommit was set to False or db does not support autocommit, we do a manual commit.
             if not self.get_autocommit(conn):
                 conn.commit()
+            # Logs all database messages or errors sent to the client
+            self.get_db_log_messages(conn)
 
         if handler is None:
             return None
@@ -571,6 +607,7 @@ class DbApiHook(BaseHook):
         replace=False,
         *,
         executemany=False,
+        autocommit=False,
         **kwargs,
     ):
         """
@@ -585,12 +622,14 @@ class DbApiHook(BaseHook):
         :param commit_every: The maximum number of rows to insert in one
             transaction. Set to 0 to insert all rows in one transaction.
         :param replace: Whether to replace instead of insert
-        :param executemany: (Deprecated) If True, all rows are inserted at once in
+        :param executemany: If True, all rows are inserted at once in
             chunks defined by the commit_every parameter. This only works if all rows
             have same number of column names, but leads to better performance.
+        :param autocommit: What to set the connection's autocommit setting to
+            before executing the query.
         """
         nb_rows = 0
-        with self._create_autocommit_connection() as conn:
+        with self._create_autocommit_connection(autocommit) as conn:
             conn.commit()
             with closing(conn.cursor()) as cur:
                 if self.supports_executemany or executemany:
@@ -724,3 +763,10 @@ class DbApiHook(BaseHook):
         else:
             authority = parsed.hostname
         return authority
+
+    def get_db_log_messages(self, conn) -> None:
+        """
+        Log all database messages sent to the client during the session.
+
+        :param conn: Connection object
+        """

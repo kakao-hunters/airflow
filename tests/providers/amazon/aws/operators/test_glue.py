@@ -34,6 +34,7 @@ from airflow.providers.amazon.aws.operators.glue import (
     GlueDataQualityRuleSetEvaluationRunOperator,
     GlueJobOperator,
 )
+from tests.providers.amazon.aws.utils.test_template_fields import validate_template_fields
 
 if TYPE_CHECKING:
     from airflow.models import TaskInstance
@@ -47,7 +48,7 @@ JOB_RUN_ID = "11111"
 
 class TestGlueJobOperator:
     @pytest.mark.db_test
-    def test_render_template(self, create_task_instance_of_operator):
+    def test_render_template(self, create_task_instance_of_operator, session):
         ti: TaskInstance = create_task_instance_of_operator(
             GlueJobOperator,
             dag_id=DAG_ID,
@@ -60,6 +61,8 @@ class TestGlueJobOperator:
             s3_bucket="{{ dag.dag_id }}",
             job_name="{{ dag.dag_id }}",
         )
+        session.add(ti)
+        session.commit()
         rendered_template: GlueJobOperator = ti.render_templates()
 
         assert DAG_ID == rendered_template.script_location
@@ -305,6 +308,17 @@ class TestGlueJobOperator:
             "folder/file", "artifacts/glue-scripts/file", bucket_name="bucket_name", replace=True
         )
 
+    def test_template_fields(self):
+        operator = GlueJobOperator(
+            task_id=TASK_ID,
+            job_name=JOB_NAME,
+            script_location="folder/file",
+            s3_bucket="bucket_name",
+            iam_role_name="role_arn",
+            replace_script_file=True,
+        )
+        validate_template_fields(operator)
+
 
 class TestGlueDataQualityOperator:
     RULE_SET_NAME = "TestRuleSet"
@@ -433,6 +447,12 @@ class TestGlueDataQualityOperator:
         with pytest.raises(AttributeError, match="RuleSet must starts with Rules = \\[ and ends with \\]"):
             self.operator.validate_inputs()
 
+    def test_template_fields(self):
+        operator = GlueDataQualityOperator(
+            task_id="create_data_quality_ruleset", name=self.RULE_SET_NAME, ruleset=self.RULE_SET
+        )
+        validate_template_fields(operator)
+
 
 class TestGlueDataQualityRuleSetEvaluationRunOperator:
     RUN_ID = "1234567890"
@@ -535,6 +555,9 @@ class TestGlueDataQualityRuleSetEvaluationRunOperator:
         assert response == self.RUN_ID
         assert glue_data_quality_hook.get_waiter.call_count == wait_for_completion
         assert self.operator.defer.call_count == deferrable
+
+    def test_template_fields(self):
+        validate_template_fields(self.operator)
 
 
 class TestGlueDataQualityRuleRecommendationRunOperator:
@@ -641,3 +664,6 @@ class TestGlueDataQualityRuleRecommendationRunOperator:
         assert response == self.RUN_ID
         assert glue_data_quality_hook.get_waiter.call_count == wait_for_completion
         assert self.operator.defer.call_count == deferrable
+
+    def test_template_fields(self):
+        validate_template_fields(self.operator)

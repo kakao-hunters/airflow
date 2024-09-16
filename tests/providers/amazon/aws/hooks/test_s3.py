@@ -81,25 +81,61 @@ class TestAwsS3Hook:
         with pytest.raises(TypeError, match="transfer_config_args expected dict, got .*"):
             S3Hook(transfer_config_args=transfer_config_args)
 
-    def test_parse_s3_url(self):
-        parsed = S3Hook.parse_s3_url("s3://test/this/is/not/a-real-key.txt")
-        assert parsed == ("test", "this/is/not/a-real-key.txt"), "Incorrect parsing of the s3 url"
-
-    def test_parse_s3_url_s3a_style(self):
-        parsed = S3Hook.parse_s3_url("s3a://test/this/is/not/a-real-key.txt")
-        assert parsed == ("test", "this/is/not/a-real-key.txt"), "Incorrect parsing of the s3 url"
-
-    def test_parse_s3_url_s3n_style(self):
-        parsed = S3Hook.parse_s3_url("s3n://test/this/is/not/a-real-key.txt")
-        assert parsed == ("test", "this/is/not/a-real-key.txt"), "Incorrect parsing of the s3 url"
-
-    def test_parse_s3_url_path_style(self):
-        parsed = S3Hook.parse_s3_url("https://s3.us-west-2.amazonaws.com/DOC-EXAMPLE-BUCKET1/test.jpg")
-        assert parsed == ("DOC-EXAMPLE-BUCKET1", "test.jpg"), "Incorrect parsing of the s3 url"
-
-    def test_parse_s3_url_virtual_hosted_style(self):
-        parsed = S3Hook.parse_s3_url("https://DOC-EXAMPLE-BUCKET1.s3.us-west-2.amazonaws.com/test.png")
-        assert parsed == ("DOC-EXAMPLE-BUCKET1", "test.png"), "Incorrect parsing of the s3 url"
+    @pytest.mark.parametrize(
+        "url, expected",
+        [
+            pytest.param(
+                "s3://test/this/is/not/a-real-key.txt", ("test", "this/is/not/a-real-key.txt"), id="s3 style"
+            ),
+            pytest.param(
+                "s3a://test/this/is/not/a-real-key.txt",
+                ("test", "this/is/not/a-real-key.txt"),
+                id="s3a style",
+            ),
+            pytest.param(
+                "s3n://test/this/is/not/a-real-key.txt",
+                ("test", "this/is/not/a-real-key.txt"),
+                id="s3n style",
+            ),
+            pytest.param(
+                "https://s3.us-west-2.amazonaws.com/DOC-EXAMPLE-BUCKET1/test.jpg",
+                ("DOC-EXAMPLE-BUCKET1", "test.jpg"),
+                id="path style",
+            ),
+            pytest.param(
+                "https://DOC-EXAMPLE-BUCKET1.s3.us-west-2.amazonaws.com/test.png",
+                ("DOC-EXAMPLE-BUCKET1", "test.png"),
+                id="virtual hosted style",
+            ),
+            pytest.param(
+                "s3://test/this/is/not/a-real-key #2.txt",
+                ("test", "this/is/not/a-real-key #2.txt"),
+                id="s3 style with #",
+            ),
+            pytest.param(
+                "s3a://test/this/is/not/a-real-key #2.txt",
+                ("test", "this/is/not/a-real-key #2.txt"),
+                id="s3a style with #",
+            ),
+            pytest.param(
+                "s3n://test/this/is/not/a-real-key #2.txt",
+                ("test", "this/is/not/a-real-key #2.txt"),
+                id="s3n style with #",
+            ),
+            pytest.param(
+                "https://s3.us-west-2.amazonaws.com/DOC-EXAMPLE-BUCKET1/test #2.jpg",
+                ("DOC-EXAMPLE-BUCKET1", "test #2.jpg"),
+                id="path style with #",
+            ),
+            pytest.param(
+                "https://DOC-EXAMPLE-BUCKET1.s3.us-west-2.amazonaws.com/test #2.png",
+                ("DOC-EXAMPLE-BUCKET1", "test #2.png"),
+                id="virtual hosted style with #",
+            ),
+        ],
+    )
+    def test_parse_s3_url(self, url: str, expected: tuple[str, str]):
+        assert S3Hook.parse_s3_url(url) == expected, "Incorrect parsing of the s3 url"
 
     def test_parse_invalid_s3_url_virtual_hosted_style(self):
         with pytest.raises(
@@ -395,7 +431,7 @@ class TestAwsS3Hook:
         hook = S3Hook()
         hook.load_string("Contént", "my_key", s3_bucket)
         assert len(hook_lineage_collector.collected_datasets.outputs) == 1
-        assert hook_lineage_collector.collected_datasets.outputs[0][0] == Dataset(
+        assert hook_lineage_collector.collected_datasets.outputs[0].dataset == Dataset(
             uri=f"s3://{s3_bucket}/my_key"
         )
 
@@ -988,7 +1024,7 @@ class TestAwsS3Hook:
         path.write_text("Content")
         hook.load_file(path, "my_key", s3_bucket)
         assert len(hook_lineage_collector.collected_datasets.outputs) == 1
-        assert hook_lineage_collector.collected_datasets.outputs[0][0] == Dataset(
+        assert hook_lineage_collector.collected_datasets.outputs[0].dataset == Dataset(
             uri=f"s3://{s3_bucket}/my_key"
         )
 
@@ -1060,12 +1096,12 @@ class TestAwsS3Hook:
         ):
             mock_hook.copy_object("my_key", "my_key3", s3_bucket, s3_bucket)
             assert len(hook_lineage_collector.collected_datasets.inputs) == 1
-            assert hook_lineage_collector.collected_datasets.inputs[0][0] == Dataset(
+            assert hook_lineage_collector.collected_datasets.inputs[0].dataset == Dataset(
                 uri=f"s3://{s3_bucket}/my_key"
             )
 
             assert len(hook_lineage_collector.collected_datasets.outputs) == 1
-            assert hook_lineage_collector.collected_datasets.outputs[0][0] == Dataset(
+            assert hook_lineage_collector.collected_datasets.outputs[0].dataset == Dataset(
                 uri=f"s3://{s3_bucket}/my_key3"
             )
 
@@ -1198,7 +1234,7 @@ class TestAwsS3Hook:
         s3_hook.download_file(key=key, bucket_name=bucket)
 
         assert len(hook_lineage_collector.collected_datasets.inputs) == 1
-        assert hook_lineage_collector.collected_datasets.inputs[0][0] == Dataset(
+        assert hook_lineage_collector.collected_datasets.inputs[0].dataset == Dataset(
             uri="s3://test_bucket/test_key"
         )
 
@@ -1250,12 +1286,12 @@ class TestAwsS3Hook:
         )
 
         assert len(hook_lineage_collector.collected_datasets.inputs) == 1
-        assert hook_lineage_collector.collected_datasets.inputs[0][0] == Dataset(
+        assert hook_lineage_collector.collected_datasets.inputs[0].dataset == Dataset(
             uri="s3://test_bucket/test_key/test.log"
         )
 
         assert len(hook_lineage_collector.collected_datasets.outputs) == 1
-        assert hook_lineage_collector.collected_datasets.outputs[0][0] == Dataset(
+        assert hook_lineage_collector.collected_datasets.outputs[0].dataset == Dataset(
             uri=f"file://{local_path}/test.log",
         )
 

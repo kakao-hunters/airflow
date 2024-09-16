@@ -96,7 +96,7 @@ test types you want to use in various ``breeze testing`` sub-commands in three w
 Those test types are defined:
 
 * ``Always`` - those are tests that should be always executed (always sub-folder)
-* ``API`` - Tests for the Airflow API (api, api_connexion, api_experimental and api_internal sub-folders)
+* ``API`` - Tests for the Airflow API (api, api_connexion, api_internal, api_fastapi sub-folders)
 * ``CLI`` - Tests for the Airflow CLI (cli folder)
 * ``Core`` - for the core Airflow functionality (core, executors, jobs, models, ti_deps, utils sub-folders)
 * ``Operators`` - tests for the operators (operators folder with exception of Virtualenv Operator tests and
@@ -738,6 +738,39 @@ You can also use fixture to create object that needs database just like this.
         conn = request.getfixturevalue(conn)
         ...
 
+Running tests with Database isolation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Running tests with DB isolation is a special case of tests that require ``internal-api`` component to be
+started in order to execute the tests. Only selected tests can be run with the database isolation
+(TODO: add the list) - they are simulating running untrusted components (dag file processor, triggerer,
+worker) running in an environment where there is no DB configuration and certain "internal_api" endpoints
+are used to communicate with the internal-api component (that can access the DB directly).
+
+In the ``database isolation mode`` the test code can access the DB and perform setup/teardown but the code
+directly from airflow package will fail if the database is accessed directly - all the DB calls should go
+through the internal API component.
+
+When you run ``breeze testing tests --database-isolation`` - the internal API server will be started for
+you automatically:
+
+.. code-block:: shell
+
+   breeze testing tests --database-isolation tests/dag_processing/
+
+However, when you want to run the tests interactively, you need to use ``breeze shell --database-isolation``
+command and either use ``tmux`` to split your terminal and run the internal API component in the second
+pane or run it after re-entering the shell with separate ``breeze exec`` command.
+
+.. code-block:: shell
+
+   breeze shell --database-isolation tests/dag_processing/
+   > tmux
+   > Ctrl-B "
+   > Panel 1: airflow internal-api
+   > Panel 2: pytest tests/dag_processing
+
+
 
 Running Unit tests
 ------------------
@@ -1063,10 +1096,10 @@ can also decide to only run tests with ``-m quarantined`` flag to run only those
 
 
 Compatibility Provider unit tests against older airflow releases
-................................................................
+----------------------------------------------------------------
 
 Why we run provider compatibility tests
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.......................................
 
 Our CI runs provider tests for providers with previous compatible airflow releases. This allows to check
 if the providers still work when installed for older airflow versions.
@@ -1089,7 +1122,7 @@ taken that the tests implemented for providers in the sources allow to run it ag
 of Airflow and against Airflow installed from PyPI package rather than from the sources.
 
 Running the compatibility tests locally
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.......................................
 
 Running tests can be easily done locally by running appropriate ``breeze`` command. In CI the command
 is slightly different as it is run using providers build using wheel packages, but it is faster
@@ -1127,7 +1160,7 @@ directly to the container.
    In such case you should follow the ``CI`` way of running the tests (see below).
 
 Implementing compatibility for provider tests for older Airflow versions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+........................................................................
 
 When you implement tests for providers, you should make sure that they are compatible with older
 
@@ -1154,7 +1187,7 @@ are not part of the public API. We deal with it in one of the following ways:
   from tests.test_utils.compat import AIRFLOW_V_2_7_PLUS
 
 
-  @pytest.mark.skip(not AIRFLOW_V_2_7_PLUS, reason="The tests should be skipped for Airflow < 2.7")
+  @pytest.mark.skipif(not AIRFLOW_V_2_7_PLUS, reason="The tests should be skipped for Airflow < 2.7")
   def some_test_that_only_works_for_airflow_2_7_plus():
       pass
 
@@ -1188,10 +1221,16 @@ are not part of the public API. We deal with it in one of the following ways:
    top-level import into a local import, so that Pytest parser does not fail on collection.
 
 Running provider compatibility tests in CI
-------------------------------------------
+..........................................
 
 In CI those tests are run in a slightly more complex way because we want to run them against the build
 provider packages, rather than mounted from sources.
+
+In case of canary runs we add ``--clean-airflow-installation`` flag that removes all packages before
+installing older airflow version, and then installs development dependencies
+from latest airflow - in order to avoid case where a provider depends on a new dependency added in latest
+version of Airflow. This clean removal and re-installation takes quite some time though and in order to
+speed up the tests in regular PRs we only do that in the canary runs.
 
 The exact way CI tests are run can be reproduced locally building providers from selected tag/commit and
 using them to install and run tests against the selected airflow version.
@@ -1229,6 +1268,14 @@ Herr id how to reproduce it.
   breeze shell --use-packages-from-dist --package-format wheel --use-airflow-version 2.9.1  \
    --install-airflow-with-constraints --providers-skip-constraints --mount-sources tests
 
+In case you want to reproduce canary run, you need to add ``--clean-airflow-installation`` flag:
+
+.. code-block:: bash
+
+  breeze shell --use-packages-from-dist --package-format wheel --use-airflow-version 2.9.1  \
+   --install-airflow-with-constraints --providers-skip-constraints --mount-sources tests --clean-airflow-installation
+
+
 6. You can then run tests as usual:
 
 .. code-block:: bash
@@ -1262,7 +1309,7 @@ This is run in order to check whether we are not using a feature that is not ava
 older version of some dependencies.
 
 Tests with lowest-direct dependency resolution for Airflow
-----------------------------------------------------------
+..........................................................
 
 You can test minimum dependencies that are installed by Airflow by running (for example to run "Core" tests):
 
@@ -1291,7 +1338,7 @@ command as a sequence of downgrades like this:
 
 
 Tests with lowest-direct dependency resolution for a Provider
--------------------------------------------------------------
+.............................................................
 
 Similarly we can test if the provider tests are working for lowest dependencies of specific provider.
 
@@ -1334,7 +1381,7 @@ downgraded dependencies will contain both Airflow and Google Provider dependenci
 
 
 How to fix failing lowest-direct dependency resolution tests
-------------------------------------------------------------
+............................................................
 
 When your tests pass in regular test, but fail in "lowest-direct" dependency resolution tests, you need
 to figure out the lower-bindings missing in  ``hatch_build.py``  (for Airflow core dependencies) or

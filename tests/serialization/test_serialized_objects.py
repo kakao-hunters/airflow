@@ -29,9 +29,16 @@ import pytest
 from dateutil import relativedelta
 from kubernetes.client import models as k8s
 from pendulum.tz.timezone import Timezone
+from pydantic import BaseModel
 
 from airflow.datasets import Dataset, DatasetAlias, DatasetAliasEvent
-from airflow.exceptions import AirflowRescheduleException, SerializationError, TaskDeferred
+from airflow.exceptions import (
+    AirflowException,
+    AirflowFailException,
+    AirflowRescheduleException,
+    SerializationError,
+    TaskDeferred,
+)
 from airflow.jobs.job import Job
 from airflow.models.connection import Connection
 from airflow.models.dag import DAG, DagModel, DagTag
@@ -57,7 +64,6 @@ from airflow.utils import timezone
 from airflow.utils.context import OutletEventAccessor, OutletEventAccessors
 from airflow.utils.db import LazySelectSequence
 from airflow.utils.operator_resources import Resources
-from airflow.utils.pydantic import BaseModel
 from airflow.utils.state import DagRunState, State
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.types import DagRunType
@@ -152,8 +158,12 @@ def equal_time(a: datetime, b: datetime) -> bool:
     return a.strftime("%s") == b.strftime("%s")
 
 
+def equal_exception(a: AirflowException, b: AirflowException) -> bool:
+    return a.__class__ == b.__class__ and str(a) == str(b)
+
+
 def equal_outlet_event_accessor(a: OutletEventAccessor, b: OutletEventAccessor) -> bool:
-    return a.raw_key == b.raw_key and a.extra == b.extra and a.dataset_alias_event == b.dataset_alias_event
+    return a.raw_key == b.raw_key and a.extra == b.extra and a.dataset_alias_events == b.dataset_alias_events
 
 
 class MockLazySelectSequence(LazySelectSequence):
@@ -230,9 +240,7 @@ class MockLazySelectSequence(LazySelectSequence):
             lambda a, b: a.get_uri() == b.get_uri(),
         ),
         (
-            OutletEventAccessor(
-                raw_key=Dataset(uri="test"), extra={"key": "value"}, dataset_alias_event=None
-            ),
+            OutletEventAccessor(raw_key=Dataset(uri="test"), extra={"key": "value"}, dataset_alias_events=[]),
             DAT.DATASET_EVENT_ACCESSOR,
             equal_outlet_event_accessor,
         ),
@@ -240,17 +248,27 @@ class MockLazySelectSequence(LazySelectSequence):
             OutletEventAccessor(
                 raw_key=DatasetAlias(name="test_alias"),
                 extra={"key": "value"},
-                dataset_alias_event=DatasetAliasEvent(
-                    source_alias_name="test_alias", dest_dataset_uri="test_uri"
-                ),
+                dataset_alias_events=[
+                    DatasetAliasEvent(source_alias_name="test_alias", dest_dataset_uri="test_uri", extra={})
+                ],
             ),
             DAT.DATASET_EVENT_ACCESSOR,
             equal_outlet_event_accessor,
         ),
         (
-            OutletEventAccessor(raw_key="test", extra={"key": "value"}),
+            OutletEventAccessor(raw_key="test", extra={"key": "value"}, dataset_alias_events=[]),
             DAT.DATASET_EVENT_ACCESSOR,
             equal_outlet_event_accessor,
+        ),
+        (
+            AirflowException("test123 wohoo!"),
+            DAT.AIRFLOW_EXC_SER,
+            equal_exception,
+        ),
+        (
+            AirflowFailException("uuups, failed :-("),
+            DAT.AIRFLOW_EXC_SER,
+            equal_exception,
         ),
     ],
 )
@@ -301,7 +319,7 @@ sample_objects = {
     DagModelPydantic: DagModel(
         dag_id="TEST_DAG_1",
         fileloc="/tmp/dag_1.py",
-        schedule_interval="2 2 * * *",
+        timetable_summary="2 2 * * *",
         is_paused=True,
     ),
     LogTemplatePydantic: LogTemplate(
@@ -350,7 +368,7 @@ sample_objects = {
             sample_objects.get(DagModelPydantic),
             DagModelPydantic,
             DAT.DAG_MODEL,
-            lambda a, b: a.fileloc == b.fileloc and a.schedule_interval == b.schedule_interval,
+            lambda a, b: a.fileloc == b.fileloc and a.timetable_summary == b.timetable_summary,
         ),
         (
             sample_objects.get(LogTemplatePydantic),
@@ -417,6 +435,7 @@ def test_all_pydantic_models_round_trip():
         "TaskOutletDatasetReferencePydantic",
         "DagOwnerAttributesPydantic",
         "DatasetEventPydantic",
+        "TriggerPydantic",
     }
     for c in sorted(classes, key=str):
         if c.__name__ in exclusion_list:

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from unittest import mock
+from unittest.mock import Mock
 
 import boto3
 import pytest
@@ -37,6 +38,7 @@ from airflow.providers.amazon.aws.triggers.redshift_cluster import (
     RedshiftPauseClusterTrigger,
     RedshiftResumeClusterTrigger,
 )
+from tests.providers.amazon.aws.utils.test_template_fields import validate_template_fields
 
 
 class TestRedshiftCreateClusterOperator:
@@ -136,6 +138,18 @@ class TestRedshiftCreateClusterOperator:
         with pytest.raises(TaskDeferred):
             redshift_operator.execute(None)
 
+    def test_template_fields(self):
+        operator = RedshiftCreateClusterOperator(
+            task_id="task_test",
+            cluster_identifier="test-cluster",
+            node_type="dc2.large",
+            master_username="adminuser",
+            master_user_password="Test123$",
+            cluster_type="single-node",
+            deferrable=True,
+        )
+        validate_template_fields(operator)
+
 
 class TestRedshiftCreateClusterSnapshotOperator:
     @mock.patch.object(RedshiftHook, "cluster_status")
@@ -213,6 +227,15 @@ class TestRedshiftCreateClusterSnapshotOperator:
             exc.value.trigger, RedshiftCreateClusterSnapshotTrigger
         ), "Trigger is not a RedshiftCreateClusterSnapshotTrigger"
 
+    def test_template_fields(self):
+        operator = RedshiftCreateClusterSnapshotOperator(
+            task_id="test_snapshot",
+            cluster_identifier="test_cluster",
+            snapshot_identifier="test_snapshot",
+            wait_for_completion=True,
+        )
+        validate_template_fields(operator)
+
 
 class TestRedshiftDeleteClusterSnapshotOperator:
     @mock.patch(
@@ -254,6 +277,15 @@ class TestRedshiftDeleteClusterSnapshotOperator:
         )
 
         mock_get_cluster_snapshot_status.assert_not_called()
+
+    def test_template_fields(self):
+        operator = RedshiftDeleteClusterSnapshotOperator(
+            task_id="test_snapshot",
+            cluster_identifier="test_cluster",
+            snapshot_identifier="test_snapshot",
+            wait_for_completion=False,
+        )
+        validate_template_fields(operator)
 
 
 class TestResumeClusterOperator:
@@ -318,6 +350,7 @@ class TestResumeClusterOperator:
             task_id="task_test",
             cluster_identifier="test_cluster",
             aws_conn_id="aws_conn_test",
+            wait_for_completion=True,
             deferrable=True,
         )
 
@@ -340,6 +373,7 @@ class TestResumeClusterOperator:
             task_id="task_test",
             cluster_identifier="test_cluster",
             aws_conn_id="aws_conn_test",
+            wait_for_completion=True,
             deferrable=True,
         )
 
@@ -366,7 +400,7 @@ class TestResumeClusterOperator:
         mock_get_waiter.assert_called_with("cluster_resumed")
         assert mock_get_waiter.call_count == 2
         mock_get_waiter().wait.assert_called_once_with(
-            ClusterIdentifier="test_cluster", WaiterConfig={"Delay": 10, "MaxAttempts": 10}
+            ClusterIdentifier="test_cluster", WaiterConfig={"Delay": 30, "MaxAttempts": 30}
         )
 
     def test_resume_cluster_failure(self):
@@ -382,6 +416,14 @@ class TestResumeClusterOperator:
             redshift_operator.execute_complete(
                 context=None, event={"status": "error", "message": "test failure message"}
             )
+
+    def test_template_fields(self):
+        operator = RedshiftResumeClusterOperator(
+            task_id="task_test",
+            cluster_identifier="test_cluster",
+            aws_conn_id="aws_conn_test",
+        )
+        validate_template_fields(operator)
 
 
 class TestPauseClusterOperator:
@@ -437,6 +479,22 @@ class TestPauseClusterOperator:
             redshift_operator.execute(None)
         assert mock_conn.pause_cluster.call_count == 10
 
+    @mock.patch.object(RedshiftHook, "get_waiter")
+    @mock.patch.object(RedshiftHook, "get_conn")
+    def test_pause_cluster_wait_for_completion(self, mock_get_conn, mock_get_waiter):
+        """Test Pause cluster operator with defer when deferrable param is true"""
+        mock_get_conn.return_value.pause_cluster.return_value = True
+        waiter = Mock()
+        mock_get_waiter.return_value = waiter
+
+        redshift_operator = RedshiftPauseClusterOperator(
+            task_id="task_test", cluster_identifier="test_cluster", wait_for_completion=True
+        )
+
+        redshift_operator.execute(context=None)
+
+        waiter.wait.assert_called_once()
+
     @mock.patch.object(RedshiftHook, "cluster_status")
     @mock.patch.object(RedshiftHook, "get_conn")
     def test_pause_cluster_deferrable_mode(self, mock_get_conn, mock_cluster_status):
@@ -445,7 +503,7 @@ class TestPauseClusterOperator:
         mock_cluster_status.return_value = "available"
 
         redshift_operator = RedshiftPauseClusterOperator(
-            task_id="task_test", cluster_identifier="test_cluster", deferrable=True
+            task_id="task_test", cluster_identifier="test_cluster", wait_for_completion=True, deferrable=True
         )
 
         with pytest.raises(TaskDeferred) as exc:
@@ -466,7 +524,7 @@ class TestPauseClusterOperator:
         mock_cluster_status.return_value = "deleting"
 
         redshift_operator = RedshiftPauseClusterOperator(
-            task_id="task_test", cluster_identifier="test_cluster", deferrable=True
+            task_id="task_test", cluster_identifier="test_cluster", wait_for_completion=True, deferrable=True
         )
 
         with pytest.raises(AirflowException):
@@ -491,6 +549,13 @@ class TestPauseClusterOperator:
             redshift_operator.execute_complete(
                 context=None, event={"status": "error", "message": "test failure message"}
             )
+
+    def test_template_fields(self):
+        operator = RedshiftPauseClusterOperator(
+            task_id="task_test",
+            cluster_identifier="test_cluster",
+        )
+        validate_template_fields(operator)
 
 
 class TestDeleteClusterOperator:
@@ -629,3 +694,10 @@ class TestDeleteClusterOperator:
             redshift_operator.execute_complete(
                 context=None, event={"status": "error", "message": "test failure message"}
             )
+
+    def test_template_fields(self):
+        operator = RedshiftDeleteClusterOperator(
+            task_id="task_test",
+            cluster_identifier="test_cluster",
+        )
+        validate_template_fields(operator)
