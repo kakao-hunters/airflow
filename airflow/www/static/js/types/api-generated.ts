@@ -555,6 +555,22 @@ export interface paths {
      */
     get: operations["get_task_instance_try_details"];
   };
+  "/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}/tries": {
+    /**
+     * Get details of all task instance tries.
+     *
+     * *New in version 2.10.0*
+     */
+    get: operations["get_task_instance_tries"];
+  };
+  "/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}/{map_index}/tries": {
+    /**
+     * Get details of all task instance tries.
+     *
+     * *New in version 2.10.0*
+     */
+    get: operations["get_mapped_task_instance_tries"];
+  };
   "/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}/{map_index}/tries/{task_try_number}": {
     /**
      * Get details of a mapped task instance try.
@@ -720,6 +736,9 @@ export interface paths {
         task_id: components["parameters"]["TaskID"];
       };
     };
+  };
+  "/dagStats": {
+    get: operations["get_dag_stats"];
   };
   "/dagSources/{file_token}": {
     /** Get a source code using file token. */
@@ -1248,6 +1267,23 @@ export interface components {
     DAGRunCollection: {
       dag_runs?: components["schemas"]["DAGRun"][];
     } & components["schemas"]["CollectionInfo"];
+    /** @description Collection of Dag statistics. */
+    DagStatsCollectionSchema: {
+      dags?: components["schemas"]["DagStatsCollectionItem"][];
+    } & components["schemas"]["CollectionInfo"];
+    /** @description DagStats entry collection item. */
+    DagStatsCollectionItem: {
+      /** @description The DAG ID. */
+      dag_id?: string;
+      stats?: components["schemas"]["DagStatsStateCollectionItem"][] | null;
+    };
+    /** @description DagStatsState entry collection item. */
+    DagStatsStateCollectionItem: {
+      /** @description The DAG state. */
+      state?: string;
+      /** @description The DAG state count. */
+      count?: number;
+    };
     DagWarning: {
       /** @description The dag_id. */
       dag_id?: string;
@@ -1284,6 +1320,10 @@ export interface components {
       task_id?: string | null;
       /** @description The DAG Run ID */
       run_id?: string | null;
+      /** @description The Map Index */
+      map_index?: number | null;
+      /** @description The Try Number */
+      try_number?: number | null;
       /** @description A key describing the type of event. */
       event?: string;
       /**
@@ -1300,6 +1340,7 @@ export interface components {
      * @description Collection of event logs.
      *
      * *Changed in version 2.1.0*&#58; 'total_entries' field is added.
+     * *Changed in version 2.10.0*&#58; 'try_number' and 'map_index' fields are added.
      */
     EventLogCollection: {
       event_logs?: components["schemas"]["EventLog"][];
@@ -1314,7 +1355,7 @@ export interface components {
       timestamp?: string;
       /** @description The filename */
       filename?: string;
-      /** @description The full stackstrace.. */
+      /** @description The full stackstrace. */
       stack_trace?: string;
     };
     /**
@@ -4316,6 +4357,90 @@ export interface operations {
     };
   };
   /**
+   * Get details of all task instance tries.
+   *
+   * *New in version 2.10.0*
+   */
+  get_task_instance_tries: {
+    parameters: {
+      path: {
+        /** The DAG ID. */
+        dag_id: components["parameters"]["DAGID"];
+        /** The DAG run ID. */
+        dag_run_id: components["parameters"]["DAGRunID"];
+        /** The task ID. */
+        task_id: components["parameters"]["TaskID"];
+      };
+      query: {
+        /** The numbers of items to return. */
+        limit?: components["parameters"]["PageLimit"];
+        /** The number of items to skip before starting to collect the result set. */
+        offset?: components["parameters"]["PageOffset"];
+        /**
+         * The name of the field to order the results by.
+         * Prefix a field name with `-` to reverse the sort order.
+         *
+         * *New in version 2.1.0*
+         */
+        order_by?: components["parameters"]["OrderBy"];
+      };
+    };
+    responses: {
+      /** Success. */
+      200: {
+        content: {
+          "application/json": components["schemas"]["TaskInstanceCollection"];
+        };
+      };
+      401: components["responses"]["Unauthenticated"];
+      403: components["responses"]["PermissionDenied"];
+      404: components["responses"]["NotFound"];
+    };
+  };
+  /**
+   * Get details of all task instance tries.
+   *
+   * *New in version 2.10.0*
+   */
+  get_mapped_task_instance_tries: {
+    parameters: {
+      path: {
+        /** The DAG ID. */
+        dag_id: components["parameters"]["DAGID"];
+        /** The DAG run ID. */
+        dag_run_id: components["parameters"]["DAGRunID"];
+        /** The task ID. */
+        task_id: components["parameters"]["TaskID"];
+        /** The map index. */
+        map_index: components["parameters"]["MapIndex"];
+      };
+      query: {
+        /** The numbers of items to return. */
+        limit?: components["parameters"]["PageLimit"];
+        /** The number of items to skip before starting to collect the result set. */
+        offset?: components["parameters"]["PageOffset"];
+        /**
+         * The name of the field to order the results by.
+         * Prefix a field name with `-` to reverse the sort order.
+         *
+         * *New in version 2.1.0*
+         */
+        order_by?: components["parameters"]["OrderBy"];
+      };
+    };
+    responses: {
+      /** Success. */
+      200: {
+        content: {
+          "application/json": components["schemas"]["TaskInstanceCollection"];
+        };
+      };
+      401: components["responses"]["Unauthenticated"];
+      403: components["responses"]["PermissionDenied"];
+      404: components["responses"]["NotFound"];
+    };
+  };
+  /**
    * Get details of a mapped task instance try.
    *
    * *New in version 2.10.0*
@@ -4713,6 +4838,24 @@ export interface operations {
       401: components["responses"]["Unauthenticated"];
       403: components["responses"]["PermissionDenied"];
       404: components["responses"]["NotFound"];
+    };
+  };
+  get_dag_stats: {
+    parameters: {
+      query: {
+        /** One or more DAG IDs separated by commas to filter relevant Dags. */
+        dag_ids: string;
+      };
+    };
+    responses: {
+      /** Success. */
+      200: {
+        content: {
+          "application/json": components["schemas"]["DagStatsCollectionSchema"];
+        };
+      };
+      401: components["responses"]["Unauthenticated"];
+      403: components["responses"]["PermissionDenied"];
     };
   };
   /** Get a source code using file token. */
@@ -5328,6 +5471,15 @@ export type UpdateDagRunState = CamelCasedPropertiesDeep<
 export type DAGRunCollection = CamelCasedPropertiesDeep<
   components["schemas"]["DAGRunCollection"]
 >;
+export type DagStatsCollectionSchema = CamelCasedPropertiesDeep<
+  components["schemas"]["DagStatsCollectionSchema"]
+>;
+export type DagStatsCollectionItem = CamelCasedPropertiesDeep<
+  components["schemas"]["DagStatsCollectionItem"]
+>;
+export type DagStatsStateCollectionItem = CamelCasedPropertiesDeep<
+  components["schemas"]["DagStatsStateCollectionItem"]
+>;
 export type DagWarning = CamelCasedPropertiesDeep<
   components["schemas"]["DagWarning"]
 >;
@@ -5735,6 +5887,14 @@ export type GetTaskInstancesBatchVariables = CamelCasedPropertiesDeep<
 export type GetTaskInstanceTryDetailsVariables = CamelCasedPropertiesDeep<
   operations["get_task_instance_try_details"]["parameters"]["path"]
 >;
+export type GetTaskInstanceTriesVariables = CamelCasedPropertiesDeep<
+  operations["get_task_instance_tries"]["parameters"]["path"] &
+    operations["get_task_instance_tries"]["parameters"]["query"]
+>;
+export type GetMappedTaskInstanceTriesVariables = CamelCasedPropertiesDeep<
+  operations["get_mapped_task_instance_tries"]["parameters"]["path"] &
+    operations["get_mapped_task_instance_tries"]["parameters"]["query"]
+>;
 export type GetMappedTaskInstanceTryDetailsVariables = CamelCasedPropertiesDeep<
   operations["get_mapped_task_instance_try_details"]["parameters"]["path"]
 >;
@@ -5780,6 +5940,9 @@ export type GetTasksVariables = CamelCasedPropertiesDeep<
 >;
 export type GetTaskVariables = CamelCasedPropertiesDeep<
   operations["get_task"]["parameters"]["path"]
+>;
+export type GetDagStatsVariables = CamelCasedPropertiesDeep<
+  operations["get_dag_stats"]["parameters"]["query"]
 >;
 export type GetDagSourceVariables = CamelCasedPropertiesDeep<
   operations["get_dag_source"]["parameters"]["path"]

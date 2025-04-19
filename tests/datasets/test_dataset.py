@@ -31,6 +31,7 @@ from airflow.datasets import (
     DatasetAll,
     DatasetAny,
     _DatasetAliasCondition,
+    _get_normalized_scheme,
     _sanitize_uri,
 )
 from airflow.models.dataset import DatasetAliasModel, DatasetDagRunQueue, DatasetModel
@@ -358,7 +359,7 @@ def test_dag_with_complex_dataset_condition(session, dag_maker):
 
 
 def datasets_equal(d1: BaseDataset, d2: BaseDataset) -> bool:
-    if type(d1) != type(d2):
+    if type(d1) is not type(d2):
         return False
 
     if isinstance(d1, Dataset) and isinstance(d2, Dataset):
@@ -454,31 +455,69 @@ def test_datasets_expression_error(expression: Callable[[], None], error: str) -
     assert str(info.value) == error
 
 
-def mock_get_uri_normalizer(normalized_scheme):
+def test_get_normalized_scheme():
+    assert _get_normalized_scheme("http://example.com") == "http"
+    assert _get_normalized_scheme("HTTPS://example.com") == "https"
+    assert _get_normalized_scheme("ftp://example.com") == "ftp"
+    assert _get_normalized_scheme("file://") == "file"
+
+    assert _get_normalized_scheme("example.com") == ""
+    assert _get_normalized_scheme("") == ""
+    assert _get_normalized_scheme(" ") == ""
+
+
+def _mock_get_uri_normalizer_raising_error(normalized_scheme):
     def normalizer(uri):
         raise ValueError("Incorrect URI format")
 
     return normalizer
 
 
-@patch("airflow.datasets._get_uri_normalizer", mock_get_uri_normalizer)
+def _mock_get_uri_normalizer_noop(normalized_scheme):
+    def normalizer(uri):
+        return uri
+
+    return normalizer
+
+
+@patch("airflow.datasets._get_uri_normalizer", _mock_get_uri_normalizer_raising_error)
 @patch("airflow.datasets.warnings.warn")
-def test__sanitize_uri_raises_warning(mock_warn):
+def test_sanitize_uri_raises_warning(mock_warn):
     _sanitize_uri("postgres://localhost:5432/database.schema.table")
     msg = mock_warn.call_args.args[0]
     assert "The dataset URI postgres://localhost:5432/database.schema.table is not AIP-60 compliant" in msg
     assert "In Airflow 3, this will raise an exception." in msg
 
 
-@patch("airflow.datasets._get_uri_normalizer", mock_get_uri_normalizer)
+@patch("airflow.datasets._get_uri_normalizer", _mock_get_uri_normalizer_raising_error)
 @conf_vars({("core", "strict_dataset_uri_validation"): "True"})
-def test__sanitize_uri_raises_exception():
+def test_sanitize_uri_raises_exception():
     with pytest.raises(ValueError) as e_info:
         _sanitize_uri("postgres://localhost:5432/database.schema.table")
     assert isinstance(e_info.value, ValueError)
     assert str(e_info.value) == "Incorrect URI format"
 
 
+@patch("airflow.datasets._get_uri_normalizer", lambda x: None)
+def test_normalize_uri_no_normalizer_found():
+    dataset = Dataset(uri="any_uri_without_normalizer_defined")
+    assert dataset.normalized_uri is None
+
+
+@patch("airflow.datasets._get_uri_normalizer", _mock_get_uri_normalizer_raising_error)
+def test_normalize_uri_invalid_uri():
+    dataset = Dataset(uri="any_uri_not_aip60_compliant")
+    assert dataset.normalized_uri is None
+
+
+@patch("airflow.datasets._get_uri_normalizer", _mock_get_uri_normalizer_noop)
+@patch("airflow.datasets._get_normalized_scheme", lambda x: "valid_scheme")
+def test_normalize_uri_valid_uri():
+    dataset = Dataset(uri="valid_aip60_uri")
+    assert dataset.normalized_uri == "valid_aip60_uri"
+
+
+@pytest.mark.skip_if_database_isolation_mode
 @pytest.mark.db_test
 @pytest.mark.usefixtures("clear_datasets")
 class Test_DatasetAliasCondition:
